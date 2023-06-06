@@ -59,7 +59,7 @@ func NewScopedMigrator(engine *xorm.Engine, cfg *setting.Cfg, scope string) *Mig
 		mg.Logger = log.New("migrator")
 	} else {
 		mg.tableName = scope + "_migration_log"
-		mg.Logger = log.New(scope + " migrator")
+		mg.Logger = log.New(scope + "-migrator")
 	}
 	return mg
 }
@@ -284,6 +284,9 @@ func (mg *Migrator) InTransaction(callback dbTransactionFunc) error {
 	sess := mg.DBEngine.NewSession()
 	defer sess.Close()
 
+	return callback(sess)
+
+	/*
 	if err := sess.Begin(); err != nil {
 		return err
 	}
@@ -301,6 +304,7 @@ func (mg *Migrator) InTransaction(callback dbTransactionFunc) error {
 	}
 
 	return nil
+	*/
 }
 
 func casRestoreOnErr(lock *atomic.Bool, o, n bool, casErr error, f func(LockCfg) error, lockCfg LockCfg) error {

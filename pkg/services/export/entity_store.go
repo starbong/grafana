@@ -88,28 +88,30 @@ func (e *entityStoreJob) requestStop() {
 
 func (e *entityStoreJob) start(ctx context.Context) {
 	defer func() {
-		e.logger.Info("Finished dummy export job")
-
 		e.statusMu.Lock()
 		defer e.statusMu.Unlock()
+
 		s := e.status
 		if err := recover(); err != nil {
 			e.logger.Error("export panic", "error", err)
 			s.Status = fmt.Sprintf("ERROR: %v", err)
+		} else if s.Status != "" {
+			e.logger.Error("export error", "error", s.Status)
+		} else {
+			s.Status = "done"
 		}
 		// Make sure it finishes OK
 		if s.Finished < 10 {
 			s.Finished = time.Now().UnixMilli()
 		}
 		s.Running = false
-		if s.Status == "" {
-			s.Status = "done"
-		}
 		e.status = s
 		e.broadcaster(s)
+
+		e.logger.Info("Finished entity store export job")
 	}()
 
-	e.logger.Info("Starting dummy export job")
+	e.logger.Info("Starting entity store export job")
 	// Select all dashboards
 	rowUser := &user.SignedInUser{
 		Login:  "",
@@ -124,7 +126,8 @@ func (e *entityStoreJob) start(ctx context.Context) {
 	folders := make(map[int64]string)
 	folderInfo, err := e.getFolders(ctx)
 	if err != nil {
-		e.status.Status = "error: " + err.Error()
+		e.logger.Error("error getting folders: " + err.Error())
+		e.status.Status = "error getting folders: " + err.Error()
 		return
 	}
 	e.status.Last = fmt.Sprintf("export %d folders", len(folderInfo))
@@ -164,7 +167,7 @@ func (e *entityStoreJob) start(ctx context.Context) {
 			},
 		})
 		if err != nil {
-			e.status.Status = fmt.Sprintf("error exporting folder[%d]%s: %s", idx, fobj.Title, err.Error())
+			e.status.Status = fmt.Sprintf("error exporting folder [%d]%s: %s", idx, fobj.Title, err.Error())
 			return
 		}
 		e.status.Changed = time.Now().UnixMilli()
@@ -482,18 +485,18 @@ func (e *entityStoreJob) start(ctx context.Context) {
 
 		e.status.Status = fmt.Sprintf("loading %s for: org-%d", what, orgId)
 		e.broadcaster(e.status)
-		err = e.sess.Select(ctx, &info, `SELECT 
+		err = e.sess.Select(ctx, &info, `SELECT
 			dashboard.uid as folder_uid,
-			library_element.folder_id as folder_id, 
-			library_element.uid, 
-			library_element.name, 
-			library_element.description, 
-			library_element.model, 
-			library_element.created, 
-			library_element.created_by, 
-			library_element.updated, 
-			library_element.updated_by 
-		FROM library_element 
+			library_element.folder_id as folder_id,
+			library_element.uid,
+			library_element.name,
+			library_element.description,
+			library_element.model,
+			library_element.created,
+			library_element.created_by,
+			library_element.updated,
+			library_element.updated_by
+		FROM library_element
 		LEFT JOIN dashboard ON dashboard.id =library_element.folder_id
 		WHERE library_element.org_id=?
 		`, orgId)

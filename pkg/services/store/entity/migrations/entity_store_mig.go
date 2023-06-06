@@ -43,7 +43,7 @@ func initEntityTables(mg *migrator.Migrator) {
 
 			{Name: "size", Type: migrator.DB_BigInt, Nullable: false},
 			{Name: "etag", Type: migrator.DB_NVarchar, Length: 32, Nullable: false, IsLatin: true}, // md5(body)
-			{Name: "version", Type: migrator.DB_BigInt, Length: 128, Nullable: false},
+			{Name: "version", Type: migrator.DB_BigInt, Nullable: false},
 
 			// Who changed what when -- We should avoid JOINs with other tables in the database
 			{Name: "updated_at", Type: migrator.DB_BigInt, Nullable: false},
@@ -139,7 +139,7 @@ func initEntityTables(mg *migrator.Migrator) {
 		Name: "entity_history",
 		Columns: []*migrator.Column{
 			{Name: "grn", Type: migrator.DB_NVarchar, Length: grnLength, Nullable: false},
-			{Name: "version", Type: migrator.DB_BigInt, Length: 128, Nullable: false},
+			{Name: "version", Type: migrator.DB_BigInt, Nullable: false},
 
 			// Raw bytes
 			{Name: "folder", Type: migrator.DB_NVarchar, Length: 40, Nullable: false},
@@ -217,5 +217,5 @@ func initEntityTables(mg *migrator.Migrator) {
 	mg.AddMigration("set path collation on entity table", migrator.NewRawSQLMigration("").
 		// MySQL `utf8mb4_unicode_ci` collation is set in `mysql_dialect.go`
 		// SQLite uses a `BINARY` collation by default
-		Postgres("ALTER TABLE entity_folder ALTER COLUMN slug_path TYPE VARCHAR(1024) COLLATE \"C\";")) // Collate C - sorting done based on character code byte values
+		Postgres("ALTER TABLE entity_folder ALTER COLUMN slug_path TYPE VARCHAR(1024) COLLATE \"en-US\";")) // Collate C - sorting done based on character code byte values
 }

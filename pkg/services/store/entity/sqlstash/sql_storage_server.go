@@ -10,14 +10,16 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/grafana/grafana/pkg/infra/appcontext"
-	"github.com/grafana/grafana/pkg/infra/db"
 	"github.com/grafana/grafana/pkg/infra/log"
 	"github.com/grafana/grafana/pkg/infra/slugify"
 	"github.com/grafana/grafana/pkg/kinds"
+	"github.com/grafana/grafana/pkg/services/featuremgmt"
 	"github.com/grafana/grafana/pkg/services/grpcserver"
 	"github.com/grafana/grafana/pkg/services/sqlstore/session"
 	"github.com/grafana/grafana/pkg/services/store"
 	"github.com/grafana/grafana/pkg/services/store/entity"
+	entityDB "github.com/grafana/grafana/pkg/services/store/entity/db"
+	"github.com/grafana/grafana/pkg/services/store/entity/migrations"
 	"github.com/grafana/grafana/pkg/services/store/kind"
 	"github.com/grafana/grafana/pkg/services/store/resolver"
 	"github.com/grafana/grafana/pkg/setting"
@@ -30,16 +32,25 @@ import (
 var _ entity.EntityStoreServer = &sqlEntityServer{}
 var _ entity.EntityStoreAdminServer = &sqlEntityServer{}
 
-func ProvideSQLEntityServer(db db.DB, cfg *setting.Cfg, grpcServerProvider grpcserver.Provider, kinds kind.KindRegistry, resolver resolver.EntityReferenceResolver) entity.EntityStoreServer {
+func ProvideSQLEntityServer(db entityDB.EntityDB, cfg *setting.Cfg, grpcServerProvider grpcserver.Provider, kinds kind.KindRegistry, resolver resolver.EntityReferenceResolver, features featuremgmt.FeatureToggles) (entity.EntityStoreServer, error) {
 	entityServer := &sqlEntityServer{
-		sess:     db.GetSqlxSession(),
+		sess:     db.GetSession(),
 		log:      log.New("sql-entity-server"),
 		kinds:    kinds,
 		resolver: resolver,
 	}
+
 	entity.RegisterEntityStoreServer(grpcServerProvider.GetServer(), entityServer)
 	entity.WireCircularDependencyHack = entityServer
-	return entityServer
+
+	fmt.Println("SESS")
+	fmt.Println(entityServer.sess)
+
+	if err := migrations.MigrateEntityStore(db, features); err != nil {
+		return nil, err
+	}
+
+	return entityServer, nil
 }
 
 type sqlEntityServer struct {
@@ -284,8 +295,11 @@ func (s *sqlEntityServer) Write(ctx context.Context, r *entity.WriteEntityReques
 
 //nolint:gocyclo
 func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEntityRequest) (*entity.WriteEntityResponse, error) {
+	s.log.Info("AdminWrite", "request", r)
+
 	grn, err := s.validateGRN(ctx, r.GRN)
 	if err != nil {
+		s.log.Error("error validating GRN", "msg", err.Error())
 		return nil, err
 	}
 	oid := grn.ToGRNString()
@@ -325,25 +339,36 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 		origin = &entity.EntityOriginInfo{}
 	}
 
+	fmt.Println("SESS2")
+	fmt.Println(s.sess)
+
+	s.log.Info("starting transaction")
 	err = s.sess.WithTransaction(ctx, func(tx *session.SessionTx) error {
+		s.log.Info("in transaction")
+
 		var versionInfo *entity.EntityVersionInfo
 		isUpdate := false
 		if r.ClearHistory {
+			s.log.Info("clearing history")
 			// Optionally keep the original creation time information
 			if createdAt < 1000 || createdBy == "" {
 				err = s.fillCreationInfo(ctx, tx, oid, &createdAt, &createdBy)
 				if err != nil {
+					s.log.Error("error filling creation info", "msg", err.Error())
 					return err
 				}
 			}
 			_, err = doDelete(ctx, tx, grn)
 			if err != nil {
+				s.log.Error("error removing old version", "msg", err.Error())
 				return err
 			}
 			versionInfo = &entity.EntityVersionInfo{}
 		} else {
+			s.log.Info("getting current version")
 			versionInfo, rsp.GUID, err = s.selectForUpdate(ctx, tx, oid)
 			if err != nil {
+				s.log.Error("error getting current version", "msg", err.Error())
 				return err
 			}
 		}
@@ -372,6 +397,8 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 			// Increment the version
 			versionInfo.Version += 1
 
+			s.log.Info("clearing labels, refs & nested")
+
 			// Clear the labels+refs
 			if _, err := tx.Exec(ctx, "DELETE FROM entity_labels WHERE grn=? OR parent_grn=?", oid, oid); err != nil {
 				return err
@@ -385,6 +412,7 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 		}
 
 		// 1. Add the `entity_history` values
+		s.log.Info("writing entity history")
 		versionInfo.Size = int64(len(body))
 		versionInfo.ETag = etag
 		versionInfo.UpdatedAt = updatedAt
@@ -399,6 +427,7 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 			updatedAt, versionInfo.UpdatedBy,
 		)
 		if err != nil {
+			s.log.Error("error writing entity history", "msg", err.Error())
 			return err
 		}
 
@@ -471,6 +500,7 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 		// 5. Add/update the main `entity` table
 		rsp.Entity = versionInfo
 		if isUpdate {
+			s.log.Info("updating entity")
 			rsp.Status = entity.WriteEntityResponse_UPDATED
 			_, err = tx.Exec(ctx, "UPDATE entity SET "+
 				"body=?, meta=?, status=?, size=?, etag=?, version=?, "+
@@ -486,7 +516,11 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 				origin.Source, origin.Key, timestamp,
 				oid,
 			)
+			if err != nil {
+				s.log.Error("error updating entity", "msg", err.Error())
+			}
 		} else {
+			s.log.Info("inserting entity")
 			_, err = tx.Exec(ctx, "INSERT INTO entity ("+
 				"guid, grn, tenant_id, kind, uid, folder, "+
 				"size, body, meta, status, etag, version, "+
@@ -507,29 +541,46 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 				summary.labels, summary.fields, summary.errors,
 				origin.Source, origin.Key, origin.Time,
 			)
-		}
-		if err == nil {
-			switch r.GRN.Kind {
-			case entity.StandardKindFolder:
-				err = updateFolderTree(ctx, tx, grn.TenantId)
-			case "accesspolicy":
-				err = updateAccessControl(ctx, tx, grn.TenantId, oid, meta, r.Body)
+			if err != nil {
+				s.log.Error("error inserting entity", "msg", err.Error())
 			}
 		}
-		if err == nil {
-			summary.folder = r.Folder
-			summary.parent_grn = grn
-			return s.writeSearchInfo(ctx, tx, oid, summary)
+		if err != nil {
+			return err
 		}
-		return err
+
+		switch r.GRN.Kind {
+		case entity.StandardKindFolder:
+			err = updateFolderTree(ctx, tx, grn.TenantId)
+			if err != nil {
+				s.log.Error("error updating folder tree", "msg", err.Error())
+				return err
+			}
+		case "accesspolicy":
+			err = updateAccessControl(ctx, tx, grn.TenantId, oid, meta, r.Body)
+			if err != nil {
+				s.log.Error("error updating access control", "msg", err.Error())
+				return err
+			}
+		}
+
+		summary.folder = r.Folder
+		summary.parent_grn = grn
+
+		return s.writeSearchInfo(ctx, tx, oid, summary)
 	})
+	s.log.Info("finished transaction")
+
 	rsp.Body = body           // k8s
 	rsp.MetaJson = r.Meta     // k8s
 	rsp.StatusJson = r.Status // k8s
 	rsp.SummaryJson = summary.marshaled
 	if err != nil {
+		s.log.Error("error writing entity", "msg", err.Error())
 		rsp.Status = entity.WriteEntityResponse_ERROR
 	}
+
+	s.log.Info("returning")
 	return rsp, err
 }
 

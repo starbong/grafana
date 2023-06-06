@@ -4,23 +4,16 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/grafana/grafana/pkg/infra/db"
 	"github.com/grafana/grafana/pkg/services/featuremgmt"
-	"github.com/grafana/grafana/pkg/services/sqlstore"
 	"github.com/grafana/grafana/pkg/services/sqlstore/migrator"
 	"github.com/grafana/grafana/pkg/services/sqlstore/session"
+	entityDB "github.com/grafana/grafana/pkg/services/store/entity/db"
 	"github.com/grafana/grafana/pkg/setting"
 )
 
-func MigrateEntityStore(xdb db.DB, features featuremgmt.FeatureToggles) error {
+func MigrateEntityStore(db entityDB.EntityDB, features featuremgmt.FeatureToggles) error {
 	// Skip if feature flag is not enabled
 	if !features.IsEnabled(featuremgmt.FlagEntityStore) {
-		return nil
-	}
-
-	// Migrations depend on upstream xorm implementations
-	sql, ok := xdb.(*sqlstore.SQLStore)
-	if !ok {
 		return nil
 	}
 
@@ -33,7 +26,7 @@ func MigrateEntityStore(xdb db.DB, features featuremgmt.FeatureToggles) error {
 	}
 
 	marker := "Initialize entity tables (v002)" // changing this key wipe+rewrite everything
-	mg := migrator.NewScopedMigrator(sql.GetEngine(), sql.Cfg, "entity")
+	mg := migrator.NewScopedMigrator(db.GetEngine(), db.GetCfg(), "entity")
 	mg.AddCreateMigration()
 	mg.AddMigration(marker, &migrator.RawSQLMigration{})
 	initEntityTables(mg)
@@ -52,7 +45,7 @@ func MigrateEntityStore(xdb db.DB, features featuremgmt.FeatureToggles) error {
 		tables := []string{"entity_migration_log"}
 
 		ctx := context.Background()
-		err = sql.GetSqlxSession().WithTransaction(ctx, func(tx *session.SessionTx) error {
+		err = db.GetSession().WithTransaction(ctx, func(tx *session.SessionTx) error {
 			for _, t := range tables {
 				_, err := tx.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", t))
 				if err != nil {
@@ -68,5 +61,5 @@ func MigrateEntityStore(xdb db.DB, features featuremgmt.FeatureToggles) error {
 
 	return mg.Start(
 		features.IsEnabled(featuremgmt.FlagMigrationLocking),
-		sql.GetMigrationLockAttemptTimeout())
+		0)
 }

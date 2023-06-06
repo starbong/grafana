@@ -52,20 +52,37 @@ func (gs *SessionDB) Beginx() (*SessionTx, error) {
 }
 
 func (gs *SessionDB) WithTransaction(ctx context.Context, callback func(*SessionTx) error) error {
+	err := gs.sqlxdb.Ping()
+	if err != nil {
+		fmt.Println(gs.sqlxdb.DB)
+		fmt.Printf("tx ping err: %v\n", err)
+		return err
+	}
+
 	// Instead of begin a transaction, we need to check the transaction in context, if it exists,
 	// we can reuse it.
 	tx, err := gs.Beginx()
 	if err != nil {
+		fmt.Println(gs.sqlxdb.DB)
+		fmt.Printf("tx begin err: %v\n", err)
 		return err
 	}
 	err = callback(tx)
 	if err != nil {
 		if rbErr := tx.sqlxtx.Rollback(); rbErr != nil {
+			fmt.Printf("tx err: %v, rb err: %v", err, rbErr)
 			return fmt.Errorf("tx err: %v, rb err: %v", err, rbErr)
 		}
+		fmt.Printf("tx callback err: %v\n", err)
 		return err
 	}
-	return tx.sqlxtx.Commit()
+	err = tx.sqlxtx.Commit()
+	if err != nil {
+		fmt.Printf("tx commit err: %v\n", err)
+		return err
+	}
+
+	return nil
 }
 
 func (gs *SessionDB) ExecWithReturningId(ctx context.Context, query string, args ...interface{}) (int64, error) {
