@@ -34,6 +34,7 @@ var _ entity.EntityStoreAdminServer = &sqlEntityServer{}
 
 func ProvideSQLEntityServer(db entityDB.EntityDB, cfg *setting.Cfg, grpcServerProvider grpcserver.Provider, kinds kind.KindRegistry, resolver resolver.EntityReferenceResolver, features featuremgmt.FeatureToggles) (entity.EntityStoreServer, error) {
 	entityServer := &sqlEntityServer{
+		db:       db,
 		sess:     db.GetSession(),
 		log:      log.New("sql-entity-server"),
 		kinds:    kinds,
@@ -55,6 +56,7 @@ func ProvideSQLEntityServer(db entityDB.EntityDB, cfg *setting.Cfg, grpcServerPr
 
 type sqlEntityServer struct {
 	log      log.Logger
+	db			 entityDB.EntityDB // needed to keep xorm engine in scope
 	sess     *session.SessionDB
 	kinds    kind.KindRegistry
 	resolver resolver.EntityReferenceResolver

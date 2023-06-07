@@ -60,7 +60,6 @@ func ProvideEntityDB(db db.DB, cfg *setting.Cfg) (EntityDB, error) {
 
 			engine, err = xorm.NewEngine("mysql", connectionString)
 			if err != nil {
-				panic(err)
 				return nil, err
 			}
 
