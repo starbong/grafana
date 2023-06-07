@@ -16,7 +16,10 @@ func getLatinPathColumn(name string) *migrator.Column {
 	}
 }
 
-func initEntityTables(mg *migrator.Migrator) {
+func initEntityTables(mg *migrator.Migrator) string {
+	marker := "Initialize entity tables (v003)" // changing this key wipe+rewrite everything
+	mg.AddMigration(marker, &migrator.RawSQLMigration{})
+
 	grnLength := 256 // len(tenant)~8 + len(kind)!16 + len(kind)~128 = 256
 	tables := []migrator.Table{}
 	tables = append(tables, migrator.Table{
@@ -84,8 +87,8 @@ func initEntityTables(mg *migrator.Migrator) {
 			getLatinPathColumn("slug_path"),                             ///slug/slug/slug/
 			{Name: "tree", Type: migrator.DB_Text, Nullable: false},     // JSON []{uid, title}
 			{Name: "depth", Type: migrator.DB_Int, Nullable: false},     // starts at 1
-			{Name: "left", Type: migrator.DB_Int, Nullable: false},      // MPTT
-			{Name: "right", Type: migrator.DB_Int, Nullable: false},     // MPTT
+			{Name: "lft", Type: migrator.DB_Int, Nullable: false},      // MPTT
+			{Name: "rgt", Type: migrator.DB_Int, Nullable: false},     // MPTT
 			{Name: "detached", Type: migrator.DB_Bool, Nullable: false}, // a parent folder was not found
 		},
 		Indices: []*migrator.Index{
@@ -218,4 +221,6 @@ func initEntityTables(mg *migrator.Migrator) {
 		// MySQL `utf8mb4_unicode_ci` collation is set in `mysql_dialect.go`
 		// SQLite uses a `BINARY` collation by default
 		Postgres("ALTER TABLE entity_folder ALTER COLUMN slug_path TYPE VARCHAR(1024) COLLATE \"en-US\";")) // Collate C - sorting done based on character code byte values
+
+	return marker
 }

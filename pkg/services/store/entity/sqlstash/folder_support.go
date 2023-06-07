@@ -143,7 +143,7 @@ func insertFolderInfo(ctx context.Context, tx *session.SessionTx, tenant int64, 
 	grn := entity.GRN{TenantId: tenant, Kind: entity.StandardKindFolder, UID: folder.UID}
 	_, err := tx.Exec(ctx,
 		`INSERT INTO entity_folder `+
-			"(grn, tenant_id, uid, slug_path, tree, depth, left, right, detached) "+
+			"(grn, tenant_id, uid, slug_path, tree, depth, lft, rgt, detached) "+
 			`VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		grn.ToGRNString(),
 		tenant,

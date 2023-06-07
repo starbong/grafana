@@ -25,37 +25,42 @@ func MigrateEntityStore(db entityDB.EntityDB, features featuremgmt.FeatureToggle
 		return nil
 	}
 
-	marker := "Initialize entity tables (v002)" // changing this key wipe+rewrite everything
 	mg := migrator.NewScopedMigrator(db.GetEngine(), db.GetCfg(), "entity")
 	mg.AddCreateMigration()
-	mg.AddMigration(marker, &migrator.RawSQLMigration{})
-	initEntityTables(mg)
+
+	marker := initEntityTables(mg)
 
 	// While this feature is under development, we can completly wipe and recreate
 	// The initial plan is to keep the source of truth in existing SQL tables, and mirrot it
 	// to a kubernetes model.  Once the kubernetes model needs to be preserved,
 	// this code should be removed
-	log, err := mg.GetMigrationLog()
+	exists, err := db.GetEngine().IsTableExist("entity_migration_log")
 	if err != nil {
 		return err
 	}
-	_, found := log[marker]
-	if !found && len(log) > 0 {
-		// Remove the migration log (and potential other orphan tables)
-		tables := []string{"entity_migration_log"}
-
-		ctx := context.Background()
-		err = db.GetSession().WithTransaction(ctx, func(tx *session.SessionTx) error {
-			for _, t := range tables {
-				_, err := tx.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", t))
-				if err != nil {
-					return err
-				}
-			}
-			return nil
-		})
+	if exists {
+		log, err := mg.GetMigrationLog()
 		if err != nil {
 			return err
+		}
+		_, found := log[marker]
+		if !found && len(log) > 0 {
+			// Remove the migration log (and potential other orphan tables)
+			tables := []string{"entity_migration_log"}
+
+			ctx := context.Background()
+			err = db.GetSession().WithTransaction(ctx, func(tx *session.SessionTx) error {
+				for _, t := range tables {
+					_, err := tx.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", t))
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
 		}
 	}
 
