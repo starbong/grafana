@@ -15,6 +15,7 @@ import (
 	"github.com/grafana/grafana/pkg/kinds"
 	"github.com/grafana/grafana/pkg/services/featuremgmt"
 	"github.com/grafana/grafana/pkg/services/grpcserver"
+	"github.com/grafana/grafana/pkg/services/sqlstore/migrator"
 	"github.com/grafana/grafana/pkg/services/sqlstore/session"
 	"github.com/grafana/grafana/pkg/services/store"
 	"github.com/grafana/grafana/pkg/services/store/entity"
@@ -36,6 +37,7 @@ func ProvideSQLEntityServer(db entityDB.EntityDB, cfg *setting.Cfg, grpcServerPr
 	entityServer := &sqlEntityServer{
 		db:       db,
 		sess:     db.GetSession(),
+		dialect:	migrator.NewDialect(db.GetEngine().DriverName()),
 		log:      log.New("sql-entity-server"),
 		kinds:    kinds,
 		resolver: resolver,
@@ -43,9 +45,6 @@ func ProvideSQLEntityServer(db entityDB.EntityDB, cfg *setting.Cfg, grpcServerPr
 
 	entity.RegisterEntityStoreServer(grpcServerProvider.GetServer(), entityServer)
 	entity.WireCircularDependencyHack = entityServer
-
-	fmt.Println("SESS")
-	fmt.Println(entityServer.sess)
 
 	if err := migrations.MigrateEntityStore(db, features); err != nil {
 		return nil, err
@@ -58,11 +57,12 @@ type sqlEntityServer struct {
 	log      log.Logger
 	db			 entityDB.EntityDB // needed to keep xorm engine in scope
 	sess     *session.SessionDB
+	dialect  migrator.Dialect
 	kinds    kind.KindRegistry
 	resolver resolver.EntityReferenceResolver
 }
 
-func getReadSelect(r *entity.ReadEntityRequest) string {
+func (s *sqlEntityServer) getReadSelect(r *entity.ReadEntityRequest) string {
 	fields := []string{
 		"tenant_id", "kind", "uid", "folder", // GRN + folder
 		"version", "size", "etag", "errors", // errors are always returned
@@ -79,7 +79,11 @@ func getReadSelect(r *entity.ReadEntityRequest) string {
 	if r.WithSummary {
 		fields = append(fields, "name", "slug", "description", "labels", "fields")
 	}
-	return "SELECT " + strings.Join(fields, ",") + " FROM entity WHERE "
+	quotedFields := make([]string, len(fields))
+	for i, f := range fields {
+		quotedFields[i] = s.dialect.Quote(f)
+	}
+	return "SELECT " + strings.Join(quotedFields, ",") + " FROM entity WHERE "
 }
 
 func (s *sqlEntityServer) rowToReadEntityResponse(ctx context.Context, rows *sql.Rows, r *entity.ReadEntityRequest) (*entity.Entity, error) {
@@ -171,7 +175,7 @@ func (s *sqlEntityServer) Read(ctx context.Context, r *entity.ReadEntityRequest)
 	args := []interface{}{grn.ToGRNString()}
 	where := "grn=?"
 
-	rows, err := s.sess.Query(ctx, getReadSelect(r)+where, args...)
+	rows, err := s.sess.Query(ctx, s.getReadSelect(r)+where, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -263,7 +267,7 @@ func (s *sqlEntityServer) BatchRead(ctx context.Context, b *entity.BatchReadEnti
 			return nil, err
 		}
 
-		where := "grn=?"
+		where := s.dialect.Quote("grn")+"=?"
 		args = append(args, grn.ToGRNString())
 		if r.Version > 0 {
 			return nil, fmt.Errorf("version not supported for batch read (yet?)")
@@ -272,7 +276,7 @@ func (s *sqlEntityServer) BatchRead(ctx context.Context, b *entity.BatchReadEnti
 	}
 
 	req := b.Batch[0]
-	query := getReadSelect(req) + strings.Join(constraints, " OR ")
+	query := s.getReadSelect(req) + strings.Join(constraints, " OR ")
 	rows, err := s.sess.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -340,9 +344,6 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 	if origin == nil {
 		origin = &entity.EntityOriginInfo{}
 	}
-
-	fmt.Println("SESS2")
-	fmt.Println(s.sess)
 
 	s.log.Info("starting transaction")
 	err = s.sess.WithTransaction(ctx, func(tx *session.SessionTx) error {
@@ -663,7 +664,7 @@ func (s *sqlEntityServer) writeSearchInfo(
 			return err
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO entity_ref (`+
-			"grn, parent_grn, family, type, id, "+
+			"grn, parent_grn, "+s.dialect.Quote("family")+", type, id, "+
 			"resolved_ok, resolved_to, resolved_warning, resolved_time) "+
 			`VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			grn, parent_grn, ref.Family, ref.Type, ref.Identifier,
@@ -874,6 +875,7 @@ func (s *sqlEntityServer) Search(ctx context.Context, r *entity.EntitySearchRequ
 	}
 
 	entityQuery := selectQuery{
+		dialect:  migrator.NewDialect(s.sess.DriverName()),
 		fields:   fields,
 		from:     "entity", // the table
 		args:     []interface{}{},

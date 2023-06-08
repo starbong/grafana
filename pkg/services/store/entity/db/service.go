@@ -74,14 +74,9 @@ func ProvideEntityDB(db db.DB, cfg *setting.Cfg) (EntityDB, error) {
 		} else {
 			return nil, fmt.Errorf("invalid db type specified: %s", dbType)
 		}
-
-		fmt.Println("connected to entitydb backend database")
 	} else {
 		engine = db.GetEngine()
 	}
-
-	fmt.Println("ENGINE")
-	fmt.Println(engine)
 
 	eDB := &entityDB{
 		cfg:    cfg,
