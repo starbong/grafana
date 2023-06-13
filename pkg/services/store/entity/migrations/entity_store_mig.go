@@ -17,7 +17,7 @@ func getLatinPathColumn(name string) *migrator.Column {
 }
 
 func initEntityTables(mg *migrator.Migrator) string {
-	marker := "Initialize entity tables (v003)" // changing this key wipe+rewrite everything
+	marker := "Initialize entity tables (v004)" // changing this key wipe+rewrite everything
 	mg.AddMigration(marker, &migrator.RawSQLMigration{})
 
 	grnLength := 256 // len(tenant)~8 + len(kind)!16 + len(kind)~128 = 256
@@ -40,9 +40,9 @@ func initEntityTables(mg *migrator.Migrator) string {
 			{Name: "access", Type: migrator.DB_Text, Nullable: true}, // JSON object
 
 			// The raw entity body (any byte array)
-			{Name: "meta", Type: migrator.DB_Blob, Nullable: true},     // raw meta object from k8s (with standard stuff removed)
-			{Name: "body", Type: migrator.DB_LongBlob, Nullable: true}, // null when nested or remote
-			{Name: "status", Type: migrator.DB_Blob, Nullable: true},   // raw status object
+			{Name: "meta", Type: migrator.DB_Text, Nullable: true},     // raw meta object from k8s (with standard stuff removed)
+			{Name: "body", Type: migrator.DB_LongText, Nullable: true}, // null when nested or remote
+			{Name: "status", Type: migrator.DB_Text, Nullable: true},   // raw status object
 
 			{Name: "size", Type: migrator.DB_BigInt, Nullable: false},
 			{Name: "etag", Type: migrator.DB_NVarchar, Length: 32, Nullable: false, IsLatin: true}, // md5(body)
@@ -147,7 +147,7 @@ func initEntityTables(mg *migrator.Migrator) string {
 			// Raw bytes
 			{Name: "folder", Type: migrator.DB_NVarchar, Length: 40, Nullable: false},
 			{Name: "access", Type: migrator.DB_Text, Nullable: true}, // JSON object
-			{Name: "body", Type: migrator.DB_LongBlob, Nullable: false},
+			{Name: "body", Type: migrator.DB_LongText, Nullable: false},
 			{Name: "size", Type: migrator.DB_BigInt, Nullable: false},
 			{Name: "etag", Type: migrator.DB_NVarchar, Length: 32, Nullable: false, IsLatin: true}, // md5(body)
 

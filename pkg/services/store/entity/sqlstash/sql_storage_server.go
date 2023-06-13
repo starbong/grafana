@@ -506,14 +506,16 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 			s.log.Info("updating entity")
 			rsp.Status = entity.WriteEntityResponse_UPDATED
 			_, err = tx.Exec(ctx, "UPDATE entity SET "+
-				"body=?, meta=?, status=?, size=?, etag=?, version=?, "+
-				"updated_at=?, updated_by=?,"+
-				"name=?, description=?,"+
+				"updated_at=?, updated_by=?, "+
+				"body=?, meta=?, status=?, "+
+				"size=?, etag=?, version=?, "+
+				"name=?, description=?, "+
 				"labels=?, fields=?, errors=?, "+
 				"origin=?, origin_key=?, origin_ts=? "+
 				"WHERE grn=?",
-				body, r.Meta, r.Status, versionInfo.Size, etag, versionInfo.Version,
 				updatedAt, versionInfo.UpdatedBy,
+				string(body), string(r.Meta), string(r.Status),
+				versionInfo.Size, etag, versionInfo.Version,
 				summary.model.Name, summary.model.Description,
 				summary.labels, summary.fields, summary.errors,
 				origin.Source, origin.Key, timestamp,
@@ -521,35 +523,43 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 			)
 			if err != nil {
 				s.log.Error("error updating entity", "msg", err.Error())
+				return err
 			}
 		} else {
 			s.log.Info("inserting entity")
 			_, err = tx.Exec(ctx, "INSERT INTO entity ("+
-				"guid, grn, tenant_id, kind, uid, folder, "+
-				"size, body, meta, status, etag, version, "+
-				"updated_at, updated_by, created_at, created_by, "+
-				"name, description, slug, "+
+				"guid, grn, tenant_id, kind, uid, "+
+				"folder, slug, "+
+				"created_at, created_by, "+
+				"updated_at, updated_by, "+
+				"body, meta, status, size, etag, version, "+
+				"name, description, "+
 				"labels, fields, errors, "+
 				"origin, origin_key, origin_ts) "+
-				"VALUES (?, ?, ?, ?, ?, ?, "+
-				" ?, ?, ?, ?, ?, ?, "+
-				" ?, ?, ?, ?, "+
-				" ?, ?, ?, "+
-				" ?, ?, ?, "+
-				" ?, ?, ?)",
-				meta.UID, oid, grn.TenantId, grn.Kind, grn.UID, r.Folder,
-				versionInfo.Size, body, r.Meta, r.Status, etag, versionInfo.Version,
-				updatedAt, createdBy, createdAt, createdBy,
-				summary.model.Name, summary.model.Description, summary.model.Slug,
+				"VALUES ("+
+				"?, ?, ?, ?, ?, "+
+				"?, ?, "+
+				"?, ?, "+
+				"?, ?, "+
+				"?, ?, ?, "+
+				"?, ?, ?, "+
+				"?, ?, "+
+				"?, ?, ?, "+
+				"?, ?, ?)",
+				meta.UID, oid, grn.TenantId, grn.Kind, grn.UID,
+				r.Folder, summary.model.Slug,
+				createdAt, createdBy,
+				updatedAt, createdBy,
+				string(body), string(r.Meta), string(r.Status),
+				versionInfo.Size, etag, versionInfo.Version,
+				summary.model.Name, summary.model.Description,
 				summary.labels, summary.fields, summary.errors,
 				origin.Source, origin.Key, origin.Time,
 			)
 			if err != nil {
 				s.log.Error("error inserting entity", "msg", err.Error())
+				return err
 			}
-		}
-		if err != nil {
-			return err
 		}
 
 		switch r.GRN.Kind {
@@ -649,7 +659,7 @@ func (s *sqlEntityServer) writeSearchInfo(
 		_, err := tx.Exec(ctx,
 			`INSERT INTO entity_labels `+
 				"(grn, label, value, parent_grn) "+
-				`VALUES (?, ?, ?, ?)`,
+				"VALUES (?, ?, ?, ?)",
 			grn, k, v, parent_grn,
 		)
 		if err != nil {
@@ -666,7 +676,7 @@ func (s *sqlEntityServer) writeSearchInfo(
 		_, err = tx.Exec(ctx, `INSERT INTO entity_ref (`+
 			"grn, parent_grn, "+s.dialect.Quote("family")+", type, id, "+
 			"resolved_ok, resolved_to, resolved_warning, resolved_time) "+
-			`VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			grn, parent_grn, ref.Family, ref.Type, ref.Identifier,
 			resolved.OK, resolved.Key, resolved.Warning, resolved.Timestamp,
 		)
@@ -819,10 +829,11 @@ func (s *sqlEntityServer) History(ctx context.Context, r *entity.EntityHistoryRe
 		return nil, fmt.Errorf("next page not supported yet")
 	}
 
-	query := "SELECT version,size,etag,updated_at,updated_by,message \n" +
-		" FROM entity_history \n" +
-		" WHERE grn=? " + page + "\n" +
-		" ORDER BY updated_at DESC LIMIT 100"
+	query := "SELECT version,size,etag,updated_at,updated_by,message " +
+		"FROM entity_history " +
+		"WHERE grn=? " + page + " " +
+		"ORDER BY updated_at DESC "+
+		"LIMIT 100"
 
 	rows, err := s.sess.Query(ctx, query, args...)
 	if err != nil {
