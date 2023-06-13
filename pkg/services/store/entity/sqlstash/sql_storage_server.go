@@ -420,15 +420,25 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 		versionInfo.ETag = etag
 		versionInfo.UpdatedAt = updatedAt
 		versionInfo.UpdatedBy = updatedBy
-		_, err = tx.Exec(ctx, `INSERT INTO entity_history (`+
-			"grn, version, message, "+
-			"size, body, etag, folder, access, "+
-			"updated_at, updated_by) "+
-			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			oid, versionInfo.Version, versionInfo.Comment,
-			versionInfo.Size, body, versionInfo.ETag, r.Folder, access,
-			updatedAt, versionInfo.UpdatedBy,
-		)
+
+		query, args, err := s.dialect.InsertQuery("entity_history", map[string]interface{}{
+			"grn":        oid,
+			"version":    versionInfo.Version,
+			"message":    versionInfo.Comment,
+			"size":       versionInfo.Size,
+			"body":       body,
+			"etag":       versionInfo.ETag,
+			"folder":     r.Folder,
+			"access":     access,
+			"updated_at": versionInfo.UpdatedAt,
+			"updated_by": versionInfo.UpdatedBy,
+		})
+		if err != nil {
+			s.log.Error("error building entity history insert", "msg", err.Error())
+			return err
+		}
+
+		_, err = tx.Exec(ctx, query, args...)
 		if err != nil {
 			s.log.Error("error writing entity history", "msg", err.Error())
 			return err
@@ -504,62 +514,83 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 		rsp.Entity = versionInfo
 		if isUpdate {
 			s.log.Info("updating entity")
-			rsp.Status = entity.WriteEntityResponse_UPDATED
-			_, err = tx.Exec(ctx, "UPDATE entity SET "+
-				"updated_at=?, updated_by=?, "+
-				"body=?, meta=?, status=?, "+
-				"size=?, etag=?, version=?, "+
-				"name=?, description=?, "+
-				"labels=?, fields=?, errors=?, "+
-				"origin=?, origin_key=?, origin_ts=? "+
-				"WHERE grn=?",
-				updatedAt, versionInfo.UpdatedBy,
-				string(body), string(r.Meta), string(r.Status),
-				versionInfo.Size, etag, versionInfo.Version,
-				summary.model.Name, summary.model.Description,
-				summary.labels, summary.fields, summary.errors,
-				origin.Source, origin.Key, timestamp,
-				oid,
+			query, args, err := s.dialect.UpdateQuery(
+				"entity",
+				map[string]interface{}{
+					"updated_at":  updatedAt,
+					"updated_by":  updatedBy,
+					"body":        body,
+					"meta":        r.Meta,
+					"status":      r.Status,
+					"size":        versionInfo.Size,
+					"etag":        versionInfo.ETag,
+					"version":     versionInfo.Version,
+					"name":        summary.model.Name,
+					"description": summary.model.Description,
+					"labels":      summary.labels,
+					"fields":      summary.fields,
+					"errors":      summary.errors,
+					"origin":      origin.Source,
+					"origin_key":  origin.Key,
+					"origin_ts":   timestamp,
+				},
+				map[string]interface{}{
+					"grn": oid,
+				},
 			)
+			if err != nil {
+				s.log.Error("error building entity update sql", "msg", err.Error())
+				return err
+			}
+			_, err = tx.Exec(ctx, query, args...)
 			if err != nil {
 				s.log.Error("error updating entity", "msg", err.Error())
 				return err
 			}
+			rsp.Status = entity.WriteEntityResponse_UPDATED
 		} else {
 			s.log.Info("inserting entity")
-			_, err = tx.Exec(ctx, "INSERT INTO entity ("+
-				"guid, grn, tenant_id, kind, uid, "+
-				"folder, slug, "+
-				"created_at, created_by, "+
-				"updated_at, updated_by, "+
-				"body, meta, status, size, etag, version, "+
-				"name, description, "+
-				"labels, fields, errors, "+
-				"origin, origin_key, origin_ts) "+
-				"VALUES ("+
-				"?, ?, ?, ?, ?, "+
-				"?, ?, "+
-				"?, ?, "+
-				"?, ?, "+
-				"?, ?, ?, "+
-				"?, ?, ?, "+
-				"?, ?, "+
-				"?, ?, ?, "+
-				"?, ?, ?)",
-				meta.UID, oid, grn.TenantId, grn.Kind, grn.UID,
-				r.Folder, summary.model.Slug,
-				createdAt, createdBy,
-				updatedAt, createdBy,
-				string(body), string(r.Meta), string(r.Status),
-				versionInfo.Size, etag, versionInfo.Version,
-				summary.model.Name, summary.model.Description,
-				summary.labels, summary.fields, summary.errors,
-				origin.Source, origin.Key, origin.Time,
+			query, args, err := s.dialect.InsertQuery(
+				"entity",
+				map[string]interface{}{
+					"guid":        meta.UID,
+					"grn":         oid,
+					"tenant_id":   grn.TenantId,
+					"kind":        grn.Kind,
+					"uid":         grn.UID,
+					"folder":      r.Folder,
+					"slug":        summary.model.Slug,
+					"created_at":  createdAt,
+					"created_by":  createdBy,
+					"updated_at":  updatedAt,
+					"updated_by":  updatedBy,
+					"body":        body,
+					"meta":        r.Meta,
+					"status":      r.Status,
+					"size":        versionInfo.Size,
+					"etag":        versionInfo.ETag,
+					"version":     versionInfo.Version,
+					"name":        summary.model.Name,
+					"description": summary.model.Description,
+					"labels":      summary.labels,
+					"fields":      summary.fields,
+					"errors":      summary.errors,
+					"origin":      origin.Source,
+					"origin_key":  origin.Key,
+					"origin_ts":   timestamp,
+				},
 			)
+			if err != nil {
+				s.log.Error("error building entity insert sql", "msg", err.Error())
+				return err
+			}
+
+			_, err = tx.Exec(ctx, query, args...)
 			if err != nil {
 				s.log.Error("error inserting entity", "msg", err.Error())
 				return err
 			}
+			rsp.Status = entity.WriteEntityResponse_CREATED
 		}
 
 		switch r.GRN.Kind {
