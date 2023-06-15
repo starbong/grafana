@@ -301,9 +301,7 @@ func (s *sqlEntityServer) Write(ctx context.Context, r *entity.WriteEntityReques
 
 //nolint:gocyclo
 func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEntityRequest) (*entity.WriteEntityResponse, error) {
-	s.log.Info("AdminWrite", "request", r)
-
-	grn, err := s.validateGRN(ctx, r.GRN)
+		grn, err := s.validateGRN(ctx, r.GRN)
 	if err != nil {
 		s.log.Error("error validating GRN", "msg", err.Error())
 		return nil, err
@@ -345,14 +343,10 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 		origin = &entity.EntityOriginInfo{}
 	}
 
-	s.log.Info("starting transaction")
 	err = s.sess.WithTransaction(ctx, func(tx *session.SessionTx) error {
-		s.log.Info("in transaction")
-
 		var versionInfo *entity.EntityVersionInfo
 		isUpdate := false
 		if r.ClearHistory {
-			s.log.Info("clearing history")
 			// Optionally keep the original creation time information
 			if createdAt < 1000 || createdBy == "" {
 				err = s.fillCreationInfo(ctx, tx, oid, &createdAt, &createdBy)
@@ -368,7 +362,6 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 			}
 			versionInfo = &entity.EntityVersionInfo{}
 		} else {
-			s.log.Info("getting current version")
 			versionInfo, rsp.GUID, err = s.selectForUpdate(ctx, tx, oid)
 			if err != nil {
 				s.log.Error("error getting current version", "msg", err.Error())
@@ -400,8 +393,6 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 			// Increment the version
 			versionInfo.Version += 1
 
-			s.log.Info("clearing labels, refs & nested")
-
 			// Clear the labels+refs
 			if _, err := tx.Exec(ctx, "DELETE FROM entity_labels WHERE grn=? OR parent_grn=?", oid, oid); err != nil {
 				return err
@@ -415,7 +406,6 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 		}
 
 		// 1. Add the `entity_history` values
-		s.log.Info("writing entity history")
 		versionInfo.Size = int64(len(body))
 		versionInfo.ETag = etag
 		versionInfo.UpdatedAt = updatedAt
@@ -513,7 +503,6 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 		// 5. Add/update the main `entity` table
 		rsp.Entity = versionInfo
 		if isUpdate {
-			s.log.Info("updating entity")
 			query, args, err := s.dialect.UpdateQuery(
 				"entity",
 				map[string]interface{}{
@@ -549,7 +538,6 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 			}
 			rsp.Status = entity.WriteEntityResponse_UPDATED
 		} else {
-			s.log.Info("inserting entity")
 			query, args, err := s.dialect.InsertQuery(
 				"entity",
 				map[string]interface{}{
@@ -613,18 +601,16 @@ func (s *sqlEntityServer) AdminWrite(ctx context.Context, r *entity.AdminWriteEn
 
 		return s.writeSearchInfo(ctx, tx, oid, summary)
 	})
-	s.log.Info("finished transaction")
-
-	rsp.Body = body           // k8s
-	rsp.MetaJson = r.Meta     // k8s
-	rsp.StatusJson = r.Status // k8s
-	rsp.SummaryJson = summary.marshaled
 	if err != nil {
 		s.log.Error("error writing entity", "msg", err.Error())
 		rsp.Status = entity.WriteEntityResponse_ERROR
 	}
 
-	s.log.Info("returning")
+	rsp.Body = body           // k8s
+	rsp.MetaJson = r.Meta     // k8s
+	rsp.StatusJson = r.Status // k8s
+	rsp.SummaryJson = summary.marshaled
+
 	return rsp, err
 }
 
@@ -687,12 +673,20 @@ func (s *sqlEntityServer) writeSearchInfo(
 
 	// Add the labels rows
 	for k, v := range summary.model.Labels {
-		_, err := tx.Exec(ctx,
-			`INSERT INTO entity_labels `+
-				"(grn, label, value, parent_grn) "+
-				"VALUES (?, ?, ?, ?)",
-			grn, k, v, parent_grn,
+		query, args, err := s.dialect.InsertQuery(
+			"entity_labels",
+			map[string]interface{}{
+				"grn":        grn,
+				"label":      k,
+				"value":      v,
+				"parent_grn": parent_grn,
+			},
 		)
+		if err != nil {
+			return err
+		}
+
+		_, err = tx.Exec(ctx, query, args...)
 		if err != nil {
 			return err
 		}
@@ -704,13 +698,25 @@ func (s *sqlEntityServer) writeSearchInfo(
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO entity_ref (`+
-			"grn, parent_grn, "+s.dialect.Quote("family")+", type, id, "+
-			"resolved_ok, resolved_to, resolved_warning, resolved_time) "+
-			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			grn, parent_grn, ref.Family, ref.Type, ref.Identifier,
-			resolved.OK, resolved.Key, resolved.Warning, resolved.Timestamp,
+		query, args, err := s.dialect.InsertQuery(
+			"entity_ref",
+			map[string]interface{}{
+				"grn":              grn,
+				"parent_grn":       parent_grn,
+				"family":           ref.Family,
+				"type":             ref.Type,
+				"id":               ref.Identifier,
+				"resolved_ok":      resolved.OK,
+				"resolved_to":      resolved.Key,
+				"resolved_warning": resolved.Warning,
+				"resolved_time":    resolved.Timestamp,
+			},
 		)
+		if err != nil {
+			return err
+		}
+
+		_, err = tx.Exec(ctx, query, args...)
 		if err != nil {
 			return err
 		}
@@ -734,21 +740,27 @@ func (s *sqlEntityServer) writeSearchInfo(
 			child.parent_grn = summary.parent_grn
 			parent_grn := child.getParentGRN()
 
-			_, err = tx.Exec(ctx, "INSERT INTO entity_nested ("+
-				"parent_grn, grn, "+
-				"tenant_id, kind, uid, folder, "+
-				"name, description, "+
-				"labels, fields, errors) "+
-				"VALUES (?, ?,"+
-				" ?, ?, ?, ?,"+
-				" ?, ?,"+
-				" ?, ?, ?)",
-				*parent_grn, grn,
-				summary.parent_grn.TenantId, childModel.Kind, childModel.UID, summary.folder,
-				child.name, child.description,
-				child.labels, child.fields, child.errors,
+			query, args, err := s.dialect.InsertQuery(
+				"entity_nested",
+				map[string]interface{}{
+					"parent_grn":  parent_grn,
+					"grn":         grn,
+					"tenant_id":   summary.parent_grn.TenantId,
+					"kind":        childModel.Kind,
+					"uid":         childModel.UID,
+					"folder":      summary.folder,
+					"name":        child.name,
+					"description": child.description,
+					"labels":      child.labels,
+					"fields":      child.fields,
+					"errors":      child.errors,
+				},
 			)
+			if err != nil {
+				return err
+			}
 
+			_, err = tx.Exec(ctx, query, args...)
 			if err != nil {
 				return err
 			}

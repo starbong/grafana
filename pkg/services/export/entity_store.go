@@ -124,106 +124,129 @@ func (e *entityStoreJob) start(ctx context.Context) {
 	e.status.Count[what] = 0
 
 	folders := make(map[int64]string)
-	folderInfo, err := e.getFolders(ctx)
-	if err != nil {
-		e.logger.Error("error getting folders: " + err.Error())
-		e.status.Status = "error getting folders: " + err.Error()
-		return
-	}
-	e.status.Last = fmt.Sprintf("export %d folders", len(folderInfo))
-	e.broadcaster(e.status)
-
-	for _, dash := range folderInfo {
-		folders[dash.ID] = dash.UID
-	}
-
-	for idx, fobj := range folderInfo {
-		rowUser.OrgID = fobj.OrgID
-		rowUser.UserID = fobj.UpdatedBy
-		if fobj.UpdatedBy < 0 {
-			rowUser.UserID = 0 // avoid Uint64Val issue????
-		}
-		f := folder.Model{Name: fobj.Title}
-		d, _ := json.Marshal(f)
-		if fobj.ParentUID == nil || *fobj.ParentUID == "" {
-			fobj.ParentUID = util.Pointer(folders[fobj.FolderID])
-		}
-
-		_, err = e.store.AdminWrite(ctx, &entity.AdminWriteEntityRequest{
-			GRN: &entity.GRN{
-				UID:  fobj.UID,
-				Kind: entity.StandardKindFolder,
-			},
-			ClearHistory: true,
-			CreatedAt:    fobj.Created.UnixMilli(),
-			UpdatedAt:    fobj.Updated.UnixMilli(),
-			UpdatedBy:    fmt.Sprintf("user:%d", fobj.UpdatedBy),
-			CreatedBy:    fmt.Sprintf("user:%d", fobj.CreatedBy),
-			Body:         d,
-			Folder:       *fobj.ParentUID,
-			Comment:      "(exported from SQL)",
-			Origin: &entity.EntityOriginInfo{
-				Source: "export-from-sql",
-			},
-		})
-		if err != nil {
-			e.status.Status = fmt.Sprintf("error exporting folder [%d]%s: %s", idx, fobj.Title, err.Error())
+	limit := 10
+	for offset := 0; ; offset += limit {
+		if e.stopRequested {
+			e.status.Status = "stopped"
 			return
 		}
-		e.status.Changed = time.Now().UnixMilli()
-		e.status.Index++
-		e.status.Count[what] += 1
-		e.status.Last = fmt.Sprintf("FOLDER: %s", fobj.UID)
+
+		e.status.Last = fmt.Sprintf("export %d-%d folders", offset, offset+limit)
 		e.broadcaster(e.status)
+
+		folderInfo, err := e.getFolders(ctx, offset, limit)
+		if err != nil {
+			e.logger.Error("error getting folders: " + err.Error())
+			e.status.Status = "error getting folders: " + err.Error()
+			return
+		}
+		if len(folderInfo) == 0 {
+			break
+		}
+
+		for _, dash := range folderInfo {
+			folders[dash.ID] = dash.UID
+		}
+
+		for idx, fobj := range folderInfo {
+			rowUser.OrgID = fobj.OrgID
+			rowUser.UserID = fobj.UpdatedBy
+			if fobj.UpdatedBy < 0 {
+				rowUser.UserID = 0 // avoid Uint64Val issue????
+			}
+			f := folder.Model{Name: fobj.Title}
+			d, _ := json.Marshal(f)
+			if fobj.ParentUID == nil || *fobj.ParentUID == "" {
+				fobj.ParentUID = util.Pointer(folders[fobj.FolderID])
+			}
+
+			_, err = e.store.AdminWrite(ctx, &entity.AdminWriteEntityRequest{
+				GRN: &entity.GRN{
+					UID:  fobj.UID,
+					Kind: entity.StandardKindFolder,
+				},
+				ClearHistory: true,
+				CreatedAt:    fobj.Created.UnixMilli(),
+				UpdatedAt:    fobj.Updated.UnixMilli(),
+				UpdatedBy:    fmt.Sprintf("user:%d", fobj.UpdatedBy),
+				CreatedBy:    fmt.Sprintf("user:%d", fobj.CreatedBy),
+				Body:         d,
+				Folder:       *fobj.ParentUID,
+				Comment:      "(exported from SQL)",
+				Origin: &entity.EntityOriginInfo{
+					Source: "export-from-sql",
+				},
+			})
+			if err != nil {
+				e.status.Status = fmt.Sprintf("error exporting folder [%d]%s: %s", idx, fobj.Title, err.Error())
+				return
+			}
+			e.status.Changed = time.Now().UnixMilli()
+			e.status.Index++
+			e.status.Count[what] += 1
+			e.status.Last = fmt.Sprintf("FOLDER: %s", fobj.UID)
+			e.broadcaster(e.status)
+		}
 	}
 
 	what = entity.StandardKindDashboard
 	e.status.Count[what] = 0
 
-	// TODO paging etc
 	// NOTE: doing work inside rows.Next() leads to database locked
-	dashInfo, err := e.getDashboards(ctx)
-	if err != nil {
-		e.status.Status = "error: " + err.Error()
-		return
-	}
-	e.status.Last = fmt.Sprintf("export %d dashboards", len(dashInfo))
-	e.broadcaster(e.status)
-
-	for _, dash := range dashInfo {
-		rowUser.OrgID = dash.OrgID
-		rowUser.UserID = dash.UpdatedBy
-		if dash.UpdatedBy < 0 {
-			rowUser.UserID = 0 // avoid Uint64Val issue????
+	limit = 10
+	for offset := 0; ;offset += limit {
+		if e.stopRequested {
+			e.status.Status = "stopped"
+			return
 		}
 
-		_, err = e.store.AdminWrite(ctx, &entity.AdminWriteEntityRequest{
-			GRN: &entity.GRN{
-				UID:  dash.UID,
-				Kind: entity.StandardKindDashboard,
-			},
-			ClearHistory: true,
-			Version:      uint64(dash.Version),
-			CreatedAt:    dash.Created.UnixMilli(),
-			UpdatedAt:    dash.Updated.UnixMilli(),
-			UpdatedBy:    fmt.Sprintf("user:%d", dash.UpdatedBy),
-			CreatedBy:    fmt.Sprintf("user:%d", dash.CreatedBy),
-			Body:         dash.Data,
-			Folder:       folders[dash.FolderID],
-			Comment:      "(exported from SQL)",
-			Origin: &entity.EntityOriginInfo{
-				Source: "export-from-sql",
-			},
-		})
+		e.status.Last = fmt.Sprintf("export %d-%d dashboards", offset, offset+limit)
+		e.broadcaster(e.status)
+
+		dashInfo, err := e.getDashboards(ctx, offset, limit)
 		if err != nil {
 			e.status.Status = "error: " + err.Error()
 			return
 		}
-		e.status.Changed = time.Now().UnixMilli()
-		e.status.Index++
-		e.status.Count[what] += 1
-		e.status.Last = fmt.Sprintf("DASH: %s", dash.UID)
-		e.broadcaster(e.status)
+		if len(dashInfo) == 0 {
+			break
+		}
+
+		for _, dash := range dashInfo {
+			rowUser.OrgID = dash.OrgID
+			rowUser.UserID = dash.UpdatedBy
+			if dash.UpdatedBy < 0 {
+				rowUser.UserID = 0 // avoid Uint64Val issue????
+			}
+
+			_, err = e.store.AdminWrite(ctx, &entity.AdminWriteEntityRequest{
+				GRN: &entity.GRN{
+					UID:  dash.UID,
+					Kind: entity.StandardKindDashboard,
+				},
+				ClearHistory: true,
+				Version:      uint64(dash.Version),
+				CreatedAt:    dash.Created.UnixMilli(),
+				UpdatedAt:    dash.Updated.UnixMilli(),
+				UpdatedBy:    fmt.Sprintf("user:%d", dash.UpdatedBy),
+				CreatedBy:    fmt.Sprintf("user:%d", dash.CreatedBy),
+				Body:         dash.Data,
+				Folder:       folders[dash.FolderID],
+				Comment:      "(exported from SQL)",
+				Origin: &entity.EntityOriginInfo{
+					Source: "export-from-sql",
+				},
+			})
+			if err != nil {
+				e.status.Status = "error: " + err.Error()
+				return
+			}
+			e.status.Changed = time.Now().UnixMilli()
+			e.status.Index++
+			e.status.Count[what] += 1
+			e.status.Last = fmt.Sprintf("DASH: %s", dash.UID)
+			e.broadcaster(e.status)
+		}
 	}
 
 	// TODO.. query lookup
@@ -431,7 +454,7 @@ func (e *entityStoreJob) start(ctx context.Context) {
 	e.status.Last = "starting teams"
 	e.status.Status = "executing team query"
 	e.broadcaster(e.status)
-	err = e.sess.Select(ctx, &teams, "SELECT * FROM team")
+	err := e.sess.Select(ctx, &teams, "SELECT * FROM team")
 	if err != nil {
 		e.status.Status = "team error: " + err.Error()
 		return
@@ -551,6 +574,7 @@ func (e *entityStoreJob) start(ctx context.Context) {
 	}
 	e.status.Changed = time.Now().UnixMilli()
 	e.status.Last = "finished"
+	e.status.Status = "done"
 	e.broadcaster(e.status)
 }
 
@@ -582,27 +606,41 @@ type folderInfo struct {
 }
 
 // TODO, paging etc
-func (e *entityStoreJob) getDashboards(ctx context.Context) ([]dashInfo, error) {
-	e.status.Last = "find dashbaords...."
+func (e *entityStoreJob) getDashboards(ctx context.Context, offset, limit int) ([]dashInfo, error) {
+	e.status.Last = "find dashboards...."
 	e.broadcaster(e.status)
 
 	dash := make([]dashInfo, 0)
-	err := e.sess.Select(ctx, &dash, "SELECT org_id,uid,version,slug,data,folder_id,created,updated,created_by,updated_by FROM dashboard WHERE is_folder=false")
+	err := e.sess.Select(ctx, &dash,
+		"SELECT org_id,uid,version,slug,data,folder_id,created,updated,created_by,updated_by"+
+			" FROM dashboard"+
+			" WHERE is_folder=false"+
+			" ORDER BY org_id,uid"+
+			" LIMIT ? OFFSET ?", limit, offset)
 	return dash, err
 }
 
 // TODO, paging etc
-func (e *entityStoreJob) getFolders(ctx context.Context) ([]folderInfo, error) {
+func (e *entityStoreJob) getFolders(ctx context.Context, offset, limit int) ([]folderInfo, error) {
 	e.status.Last = "find folders...."
 	e.broadcaster(e.status)
 
 	var err error
 	dash := make([]folderInfo, 0)
 	if e.features.IsEnabled(featuremgmt.FlagNestedFolders) {
-		err = e.sess.Select(ctx, &dash, "SELECT id,org_id,uid,title,parent_uid,description,created,updated FROM folder")
+		err = e.sess.Select(ctx, &dash,
+			"SELECT id,org_id,uid,title,parent_uid,description,created,updated"+
+				" FROM folder"+
+				" ORDER BY org_id,uid"+
+				" LIMIT ? OFFSET ?", limit, offset)
 		// ??? JOIN ??? created_by,updated_by
 	} else {
-		err = e.sess.Select(ctx, &dash, "SELECT id,org_id,uid,title,folder_id,created,updated,created_by,updated_by FROM dashboard WHERE is_folder=true")
+		err = e.sess.Select(ctx, &dash,
+			"SELECT id,org_id,uid,title,folder_id,created,updated,created_by,updated_by"+
+				" FROM dashboard"+
+				" WHERE is_folder=true"+
+				" ORDER BY org_id,uid"+
+				" LIMIT ? OFFSET ?", limit, offset)
 	}
 	return dash, err
 }
