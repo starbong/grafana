@@ -16,10 +16,6 @@ load(
     "integration_tests",
 )
 load(
-    "scripts/drone/pipelines/windows.star",
-    "windows_test_backend",
-)
-load(
     "scripts/drone/pipelines/build.star",
     "build_e2e",
 )
@@ -47,6 +43,10 @@ load(
 load(
     "scripts/drone/pipelines/lint_frontend.star",
     "lint_frontend_pipeline",
+)
+load(
+    "scripts/drone/pipelines/benchmarks.star",
+    "integration_benchmarks",
 )
 
 ver_mode = "pr"
@@ -104,18 +104,12 @@ def pr_pipelines():
             ),
             ver_mode,
         ),
-        windows_test_backend(
-            get_pr_trigger(
-                exclude_paths = ["pkg/**", "packaging/**", "go.sum", "go.mod"],
-            ),
-            "oss",
-            ver_mode,
-        ),
         lint_backend_pipeline(
             get_pr_trigger(
                 include_paths = [
                     "pkg/**",
                     "packaging/**",
+                    ".drone.yml",
                     "conf/**",
                     "go.sum",
                     "go.mod",
@@ -143,6 +137,9 @@ def pr_pipelines():
         ),
         docs_pipelines(ver_mode, trigger_docs_pr()),
         shellcheck_pipeline(),
+        integration_benchmarks(
+            prefix = ver_mode,
+        ),
     ]
 
 def get_pr_trigger(include_paths = None, exclude_paths = None):

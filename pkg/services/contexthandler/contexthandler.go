@@ -3,9 +3,6 @@ package contexthandler
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -16,6 +13,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"github.com/grafana/grafana/pkg/api/response"
 	"github.com/grafana/grafana/pkg/components/apikeygen"
 	"github.com/grafana/grafana/pkg/components/satokengen"
 	"github.com/grafana/grafana/pkg/infra/db"
@@ -113,23 +111,34 @@ func FromContext(c context.Context) *contextmodel.ReqContext {
 	return nil
 }
 
-func hashUserIdentifier(identifier string, secret string) string {
-	key := []byte(secret)
-	h := hmac.New(sha256.New, key)
-	h.Write([]byte(identifier))
-	return hex.EncodeToString(h.Sum(nil))
-}
+// CopyWithReqContext returns a copy of the parent context with a semi-shallow copy of the ReqContext as a value.
+// The ReqContexts's *web.Context is deep copied so that headers are thread-safe; additional properties are shallow copied and should be treated as read-only.
+func CopyWithReqContext(ctx context.Context) context.Context {
+	origReqCtx := FromContext(ctx)
+	if origReqCtx == nil {
+		return ctx
+	}
 
-func setSignedInUser(reqContext *contextmodel.ReqContext, identity *authn.Identity, intercomSecret string) {
-	reqContext.SignedInUser = identity.SignedInUser()
-	if identity.AuthID != "" {
-		reqContext.SignedInUser.Analytics.Identifier = identity.AuthID
-	} else {
-		reqContext.SignedInUser.Analytics.Identifier = identity.Email + "@" + setting.AppUrl
+	webCtx := &web.Context{
+		Req:  origReqCtx.Req.Clone(ctx),
+		Resp: web.NewResponseWriter(origReqCtx.Req.Method, response.CreateNormalResponse(http.Header{}, []byte{}, 0)),
 	}
-	if intercomSecret != "" {
-		reqContext.SignedInUser.Analytics.IntercomIdentifier = hashUserIdentifier(identity.AuthID, intercomSecret)
+	reqCtx := &contextmodel.ReqContext{
+		Context:               webCtx,
+		SignedInUser:          origReqCtx.SignedInUser,
+		UserToken:             origReqCtx.UserToken,
+		IsSignedIn:            origReqCtx.IsSignedIn,
+		IsRenderCall:          origReqCtx.IsRenderCall,
+		AllowAnonymous:        origReqCtx.AllowAnonymous,
+		SkipDSCache:           origReqCtx.SkipDSCache,
+		SkipQueryCache:        origReqCtx.SkipQueryCache,
+		Logger:                origReqCtx.Logger,
+		Error:                 origReqCtx.Error,
+		RequestNonce:          origReqCtx.RequestNonce,
+		IsPublicDashboardView: origReqCtx.IsPublicDashboardView,
+		LookupTokenErr:        origReqCtx.LookupTokenErr,
 	}
+	return context.WithValue(ctx, reqContextKey{}, reqCtx)
 }
 
 // Middleware provides a middleware to initialize the request context.
@@ -161,7 +170,7 @@ func (h *ContextHandler) Middleware(next http.Handler) http.Handler {
 			reqContext.Logger = reqContext.Logger.New("traceID", traceID)
 		}
 
-		if h.features.IsEnabled(featuremgmt.FlagAuthnService) {
+		if h.Cfg.AuthBrokerEnabled {
 			identity, err := h.authnService.Authenticate(ctx, &authn.Request{HTTPRequest: reqContext.Req, Resp: reqContext.Resp})
 			if err != nil {
 				if errors.Is(err, auth.ErrInvalidSessionToken) {
@@ -172,8 +181,8 @@ func (h *ContextHandler) Middleware(next http.Handler) http.Handler {
 				// Hack: set all errors on LookupTokenErr, so we can check it in auth middlewares
 				reqContext.LookupTokenErr = err
 			} else {
+				reqContext.SignedInUser = identity.SignedInUser()
 				reqContext.UserToken = identity.SessionToken
-				setSignedInUser(reqContext, identity, h.Cfg.IntercomSecret)
 				reqContext.IsSignedIn = !identity.IsAnonymous
 				reqContext.AllowAnonymous = identity.IsAnonymous
 				reqContext.IsRenderCall = identity.AuthModule == login.RenderModule
@@ -229,7 +238,7 @@ func (h *ContextHandler) Middleware(next http.Handler) http.Handler {
 		)
 
 		// when using authn service this is implemented as a post auth hook
-		if !h.features.IsEnabled(featuremgmt.FlagAuthnService) {
+		if !h.Cfg.AuthBrokerEnabled {
 			// update last seen every 5min
 			if reqContext.ShouldUpdateLastSeenAt() {
 				reqContext.Logger.Debug("Updating last user_seen_at", "user_id", reqContext.UserID)
@@ -259,13 +268,20 @@ func (h *ContextHandler) initContextWithAnonymousUser(reqContext *contextmodel.R
 		return false
 	}
 
+	httpReqCopy := &http.Request{}
+	if reqContext.Req != nil && reqContext.Req.Header != nil {
+		// avoid r.HTTPRequest.Clone(context.Background()) as we do not require a full clone
+		httpReqCopy.Header = reqContext.Req.Header.Clone()
+		httpReqCopy.RemoteAddr = reqContext.Req.RemoteAddr
+	}
+
 	go func() {
 		defer func() {
 			if err := recover(); err != nil {
 				reqContext.Logger.Warn("tag anon session panic", "err", err)
 			}
 		}()
-		if err := h.anonSessionService.TagSession(context.Background(), reqContext.Req); err != nil {
+		if err := h.anonSessionService.TagSession(context.Background(), httpReqCopy); err != nil {
 			reqContext.Logger.Warn("Failed to tag anonymous session", "error", err)
 		}
 	}()
