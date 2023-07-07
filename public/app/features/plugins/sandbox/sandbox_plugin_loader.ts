@@ -2,9 +2,9 @@ import createVirtualEnvironment from '@locker/near-membrane-dom';
 import { ProxyTarget } from '@locker/near-membrane-shared';
 
 import { PluginMeta } from '@grafana/data';
+import { config } from '@grafana/runtime';
 
-import { extractPluginIdVersionFromUrl, getPluginCdnResourceUrl, transformPluginSourceForCDN } from '../cdn/utils';
-import { PLUGIN_CDN_URL_KEY } from '../constants';
+import { transformPluginSourceForCDN } from '../cdn/utils';
 import { getPluginSettings } from '../pluginSettings';
 
 import { getGeneralSandboxDistortionMap } from './distortion_map';
@@ -159,15 +159,12 @@ async function doImportPluginModuleInSandbox(meta: PluginMeta): Promise<System.M
 }
 
 async function getPluginCode(meta: PluginMeta): Promise<string> {
-  if (meta.module.includes(`${PLUGIN_CDN_URL_KEY}/`)) {
+  if (meta.module.startsWith(config.pluginsCDNBaseURL)) {
     // should load plugin from a CDN
-    const pluginUrl = getPluginCdnResourceUrl(`/public/${meta.module}`) + '.js';
-    const response = await fetch(pluginUrl);
+    const response = await fetch(meta.module);
     let pluginCode = await response.text();
-    const { version } = extractPluginIdVersionFromUrl(pluginUrl);
     pluginCode = transformPluginSourceForCDN({
-      pluginId: meta.id,
-      version,
+      url: meta.module,
       source: pluginCode,
     });
     return pluginCode;
