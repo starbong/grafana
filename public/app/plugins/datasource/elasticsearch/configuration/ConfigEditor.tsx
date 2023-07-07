@@ -46,7 +46,7 @@ export const ConfigEditor = (props: Props) => {
         dataSourceConfig={options}
         showAccessOptions={showAccessOptions.current}
         onChange={onOptionsChange}
-        sigV4AuthToggleEnabled={true}
+        sigV4AuthToggleEnabled={config.sigV4AuthEnabled}
         renderSigV4Editor={<SIGV4ConnectionConfig {...props}></SIGV4ConnectionConfig>}
         secureSocksDSProxyEnabled={config.secureSocksDSProxyEnabled}
       />
