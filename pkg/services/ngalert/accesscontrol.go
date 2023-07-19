@@ -171,6 +171,21 @@ var (
 		},
 		Grants: []string{string(org.RoleAdmin)},
 	}
+
+	alertingProvisioningReaderWithSecretsRole = accesscontrol.RoleRegistration{
+		Role: accesscontrol.RoleDTO{
+			Name:        accesscontrol.FixedRolePrefix + "alerting.provisioning:reader-secrets",
+			DisplayName: "Read only access to alerting provisioning API with ability to export resources with decrypted secrets",
+			Description: "Read all alert rules, contact points, notification policies, silences, etc. in the organization via provisioning API and use export with decrypted secrets",
+			Group:       AlertRolesGroup,
+			Permissions: []accesscontrol.Permission{
+				{
+					Action: accesscontrol.ActionAlertingProvisioningReadSecrets, // organization scope
+				},
+			},
+		},
+		Grants: []string{string(org.RoleAdmin)},
+	}
 )
 
 func DeclareFixedRoles(service accesscontrol.Service) error {
@@ -178,6 +193,6 @@ func DeclareFixedRoles(service accesscontrol.Service) error {
 		rulesReaderRole, rulesWriterRole,
 		instancesReaderRole, instancesWriterRole,
 		notificationsReaderRole, notificationsWriterRole,
-		alertingReaderRole, alertingWriterRole, alertingProvisionerRole,
+		alertingReaderRole, alertingWriterRole, alertingProvisionerRole, alertingProvisioningReaderWithSecretsRole,
 	)
 }
